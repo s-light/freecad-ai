@@ -160,14 +160,24 @@ def _collect_object_issues(objects_state, baseline_bad):
     # still lands in an Invalid state and is caught by the invalid_state report
     # below. Kept local so it ships with the function source into the sandbox
     # harness (inspect.getsource doesn't carry module globals).
+    # Arch/BIM containers (Site, Building, BuildingPart/Floor) are pure
+    # organizational groups — they hold no geometry of their own and report a
+    # null Shape for their entire lifetime, empty or fully populated. Flagging
+    # that blocked every Arch.makeSite/makeBuilding/makeFloor call. These are
+    # scripted objects (Part::FeaturePython / App::GeometryPython) — the
+    # generic TypeId is shared with countless unrelated object types, so the
+    # semantic type has to come from Proxy.Type instead (e.g. "Site",
+    # "BuildingPart" — Building and Floor are both BuildingPart under the hood).
     null_shape_ok_types = {"Sketcher::SketchObject", "PartDesign::Body"}
+    null_shape_ok_proxy_types = {"Site", "Building", "BuildingPart", "Floor"}
     issues = []
     for st in objects_state:
         name = st["name"]
         if name in baseline_bad:
             continue
         if st.get("null"):
-            if st.get("type") not in null_shape_ok_types:
+            if (st.get("type") not in null_shape_ok_types
+                    and st.get("proxy_type") not in null_shape_ok_proxy_types):
                 issues.append("Object '" + name + "' has null shape")
         elif st.get("invalid"):
             issues.append("Object '" + name + "' has invalid shape")
@@ -268,7 +278,9 @@ try:
                 pass
         _state = getattr(_obj, "State", None)
         _bad_state = bool(_state and "Invalid" in _state)
+        _proxy_type = getattr(getattr(_obj, "Proxy", None), "Type", "")
         return {{"name": _obj.Name, "type": getattr(_obj, "TypeId", ""),
+                 "proxy_type": _proxy_type,
                  "null": _null, "invalid": _invalid, "invalid_state": _bad_state}}
 
     # Baseline: objects already broken in the opened document BEFORE user code
