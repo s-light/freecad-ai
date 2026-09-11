@@ -5,6 +5,266 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.24.0-alpha] - 2026-09-07
+
+### Added
+
+- **Connection profiles.** LLM connection settings are now named profiles.
+  Define as many as you like — `ollama-local` and `ollama-remote` can
+  coexist with different URLs and keys — and switch between them from the
+  Settings dialog without losing anything.
+- Saving a profile with an empty **Base URL** now asks first, naming the
+  profiles concerned. Such a profile fails with a bare connection error at
+  request time, and profile resolution deliberately does not substitute the
+  provider's preset URL behind your back — so the dialog says so instead.
+- **Per-utility models.** Context compaction, skill evaluation, tool
+  optimisation and tool reranking each choose a profile, or inherit the
+  active one. Run chat on a large cloud model and the throwaway work on a
+  cheap or local one.
+- A **Use this profile for chat** checkbox in the Settings dialog says
+  which profile chat runs on, and the profile dropdown marks it
+  `(active)`. Selecting a profile in the dropdown only opens it for
+  editing — browsing what your profiles hold never re-points chat.
+
+- **Optional bearer token for the MCP server** — a new
+  **AI Settings → MCP Servers → Bearer token** field, with a **Generate**
+  button, and an `MCP_AUTH_TOKEN` environment variable (env wins). When set,
+  every request to the server must carry `Authorization: Bearer <token>`;
+  a missing or wrong one is answered `401` with a `WWW-Authenticate: Bearer`
+  challenge, so a client knows to present a credential rather than that it is
+  barred outright. Empty (the default) leaves the server unauthenticated,
+  exactly as before, so nothing changes for an existing setup. Until now the
+  `Host`-header allowlist was the only thing limiting who could reach a
+  non-loopback server, and it cannot tell one client on that host from
+  another. Both start-up routes read the token — the toolbar toggle and
+  `mcp_server_http.py`. The token must be ASCII: it is compared with
+  `hmac.compare_digest()`, which raises on a non-ASCII operand, so a
+  non-ASCII token is refused when the server starts rather than crashing the
+  handler thread on every request. Contributed by @AmirF194 in
+  [#73](https://github.com/ghbalf/freecad-ai/pull/73), closing
+  [#59](https://github.com/ghbalf/freecad-ai/issues/59).
+
+  Host, port, allowed hosts and the token are all read when the server
+  starts, so changing any of them does not reconfigure a server that is
+  already running — stop and restart it.
+
+### Changed
+
+- The reranker's four-field provider override is replaced by a profile.
+  Existing overrides migrate automatically into a profile named `rerank`.
+- The reranker's **Test reranker** button now probes whichever profile
+  reranking is set to (or the active profile, if left on inherit), instead
+  of its own four fields.
+- **Test Connection** and **Test Reranker** now name the profile they
+  probed. Both deliberately test a profile that need not be the active one
+  — Test Connection tests whichever profile is open in the dialog, so you
+  can verify a new one before switching chat to it, and Test Reranker
+  follows the tool-reranking dropdown — and the status line previously gave
+  no way to tell that apart from a failure of the profile you chat with.
+  It now reads `Testing "ollama-local"...`, then
+  `"ollama-local": Connected! ...` or `"ollama-local": Failed: ...`. The
+  name is captured when the probe starts, so switching profiles while one
+  is in flight cannot mislabel the result.
+- The **Model supports vision** checkbox moved out of **Behavior** and into
+  the **LLM Provider** group, directly under the model it describes. It is
+  a property of one profile's model, not a global setting, and now reads
+  and writes the profile currently open in the dialog.
+
+### Fixed
+
+- Detected model capabilities now belong to the profile they were detected
+  on. Test Connection probes whichever profile is open in the dialog, but
+  vision, tool-calling and thinking support were recorded once for the
+  whole configuration — so testing a reranking or utility profile
+  overwrote the chat model's capabilities, and saved them to disk
+  immediately. The sharpest edge was tool support: probe an embedding
+  model on any profile and the answer "no tools" applied to chat, which
+  then stopped sending tools altogether. Each profile now carries its own
+  detection, retyping a profile's provider or model clears only that
+  profile's now-stale results, and a probe result lands in the dialog's
+  working copy like every other profile field — reaching `config.json` on
+  OK rather than the moment the probe returns. Existing settings migrate
+  onto the active profile on first load, and are still written to the top
+  level of `config.json` so an older version reads them.
+
+- Switching between profiles in the Settings dialog is lossless (#75).
+  Each profile keeps its own base URL, key, model and parameters, so
+  browsing to another profile and back leaves your edits intact and no
+  profile can overwrite another's settings. Pointing a profile at a
+  *different vendor* still loads that vendor's preset URL and model, as it
+  always has — that is an explicit "point this profile elsewhere".
+- Cancelling the Settings dialog now discards profile changes. Adding,
+  renaming, deleting or editing a profile previously took effect
+  immediately, and Test Connection could flush the change to disk before
+  you ever pressed OK.
+- Sampling parameters edited in Settings now take effect, including
+  **Remove**. For a configuration carried over from an earlier version,
+  edits were silently discarded and removed rows came back: parameters
+  lived in two places at once, a per-model dict in `config.json` and the
+  profile, and the dialog could only reach one of them. The profile is now
+  the only source; the per-model dict is left in `config.json`, unread.
+- Clearing a profile's API key now actually clears it. Upgrading copied
+  the key into a second, per-vendor slot that no part of the dialog could
+  edit, so a key cleared to rotate a leaked credential stayed on disk and
+  kept being sent — with Test Connection reporting OK. That slot is no
+  longer written on upgrade; it remains available as a hand-written
+  per-vendor default in `config.json`.
+- Test Connection now succeeds for a profile that leaves its API key blank
+  to inherit the vendor-wide default, matching what normal chat use
+  already did.
+
+## [0.23.1-alpha] - 2026-08-31
+
+### Fixed
+
+- **The legacy `POST /messages` endpoint no longer answers `500` to malformed
+  input** — it parsed `Content-Length` and decoded the body without guarding
+  either, so a non-integer header or a body that was not valid UTF-8 escaped as
+  an uncaught exception: the client got a `500` and the user got a traceback in
+  the FreeCAD console. A negative `Content-Length` was worse — it made the read
+  block to end-of-stream, pinning a worker thread until the socket timed out
+  without answering at all. All three now return `400` with JSON-RPC `-32700`,
+  matching what the `/mcp` route has done since v0.23.0-alpha. The success path
+  is unchanged.
+  ([#69](https://github.com/ghbalf/freecad-ai/issues/69))
+
+- **The MCP client now sends `MCP-Protocol-Version` on every request after the
+  handshake** — required of clients since the `2025-06-18` protocol revision and
+  omitted since the client was written. It worked only by coincidence: a server
+  seeing no header is told to assume `2025-03-26`, which is what we speak. A
+  server that has dropped that revision was entitled to reject every call after
+  `initialize`. The header carries the version the *server* chose during the
+  handshake, not the one we asked with, so a server negotiating a newer revision
+  is now answered correctly. Affects both HTTP client transports; STDIO has no
+  headers and is unchanged.
+  ([#64](https://github.com/ghbalf/freecad-ai/issues/64))
+
+## [0.23.0-alpha] - 2026-08-31
+
+### Added
+
+- **Streamable HTTP transport for the MCP server** — the server now answers
+  `POST /mcp` with the JSON-RPC reply inline, alongside the existing
+  `GET /sse` + `POST /messages` pair, on the same address and port. Clients
+  connect with whichever transport they speak and nothing needs reconfiguring.
+  HTTP+SSE was deprecated in the `2026-07-28` protocol revision with a
+  twelve-month removal window, so the URL the toolbar and
+  `mcp_server_http.py` report is now `http://host:port/mcp`; existing `/sse`
+  configurations keep working. No session ids are issued and `GET /mcp`
+  answers `405`, which is what the newer revisions expect anyway.
+  ([#65](https://github.com/ghbalf/freecad-ai/issues/65))
+
+- **Allowed `Host` headers are configurable** — a new
+  **AI Settings → MCP Servers → Allowed Host headers** field and a
+  `MCP_ALLOWED_HOSTS` environment variable (comma-separated, env wins) name the
+  hosts the MCP server answers to. This is what makes a non-loopback bind
+  usable: clients send the address they dialled, so it has to be named here.
+  Empty (the default) keeps today's behaviour exactly — loopback only, and a
+  wildcard bind still refused.
+  `*` is not accepted: the server has **no authentication**
+  ([#59](https://github.com/ghbalf/freecad-ai/issues/59)), so this allowlist is
+  the only thing limiting who can reach it.
+
+### Fixed
+
+- **`MCP_HOST=0.0.0.0` locked out every client it appeared to let in** — the
+  server's `Host`-header allowlist was seeded from the bind address, so a
+  wildcard bind added the literal string `0.0.0.0` to it. No client's `Host`
+  header ever names a wildcard address, so the socket listened on every
+  interface while returning 403 to every non-loopback client — with no error
+  and no log line to say why. A wildcard bind is now refused at startup with a
+  message naming the fix, instead of failing silently later. Reported and fixed
+  by @AmirF194 in [#66](https://github.com/ghbalf/freecad-ai/pull/66),
+  closing [#60](https://github.com/ghbalf/freecad-ai/issues/60).
+
+## [0.22.0-alpha] - 2026-08-23
+
+### Added
+
+- **Start and stop the MCP server from the toolbar** — a checkable **MCP Server**
+  command in the FreeCAD AI toolbar and menu starts the HTTP/SSE server in the
+  running FreeCAD, so external clients no longer need a command-line launch or a
+  pasted `exec(open(...))` snippet. Suggested by @s-light on
+  [#55](https://github.com/ghbalf/freecad-ai/issues/55).
+  The button reports the true state: a server started via
+  `FreeCAD.AppImage mcp_server_http.py` or from the Python console shows as
+  running and can be stopped from the button, because all three routes now share
+  one controller.
+  Host and port are configurable under **AI Settings → MCP Servers**, with
+  `MCP_HOST`/`MCP_PORT` still taking precedence. Note the server has **no
+  authentication** — see [#59](https://github.com/ghbalf/freecad-ai/issues/59).
+
+### Fixed
+
+- **A failed MCP server start was silent** — the listening socket was created
+  inside the server thread, so a port conflict raised `OSError` in a daemon
+  thread and vanished: no dialog, no log the user would see, FreeCAD carrying on
+  as though the server were up. `mcp_server_http.py` compounded it by printing
+  `MCP SSE server running on ...` *before* attempting the bind. The bind now
+  happens before anything is announced, and failures reach the caller.
+- **The MCP server could not be stopped** — `SSEServerTransport` never kept a
+  handle on its HTTP server, so the only way to stop it was to quit FreeCAD. It
+  now has a `stop()` that shuts down and releases the port.
+- **MCP server reported a stale version to every client** — `SERVER_INFO` in
+  `freecad_ai/mcp/server.py` hardcoded `"0.1.0"`, so `claude mcp list`, Claude
+  Desktop and any other client displayed "FreeCAD AI 0.1.0" no matter which
+  release was installed. It now derives from `freecad_ai.__version__`. Cosmetic,
+  but actively misleading when diagnosing someone else's setup — and the value
+  had been wrong for twenty releases. Found while verifying the external-client
+  docs for #55; `MCPServer` had no test coverage at all, which is why nobody
+  caught it.
+- **"Keep Chat Panel Open" always showed a checkmark** — the menu entry's tick
+  was pinned on from the moment the workbench loaded and never moved, whatever
+  the setting actually was. FreeCAD 1.1.x reads a command's `Checkable`
+  resource as the action's *initial* state rather than as "this action may be
+  checked", and never calls a Python command's `IsChecked()`, so the tick has
+  to be pushed by hand. It now is — from the command itself, from workbench
+  activation, and from the Settings dialog.
+  [#62](https://github.com/ghbalf/freecad-ai/issues/62)
+- **A stuck MCP client could freeze FreeCAD** — SSE writes are serialized under
+  a lock that `stop()` also needs, and the connection had no timeout, so a
+  client that stopped reading could block the write indefinitely and hang the
+  Stop button on the Qt main thread. The connection now times out, which drops
+  the wedged client instead of freezing the GUI.
+  [#63](https://github.com/ghbalf/freecad-ai/issues/63)
+
+## [0.21.2-alpha] - 2026-08-15
+
+### Fixed
+
+- **`list_documents` raised AttributeError on every FreeCAD 1.1.x session**
+  (#57, reported and fixed by @s-light in #56) — the handler read
+  `doc.Modified`, but `App.Document` has no such property; the dirty flag lives
+  on the *Gui* document. The tool failed for all users on 1.1.x, not just the
+  Flatpak build it was reported against — confirmed locally against 1.1.1
+  (AppImage). The flag now comes from `Gui.getDocument(name).Modified`, falling
+  back to `False` when there is no GUI (the STDIO MCP server entry point runs
+  headless) or when the document is unknown to the Gui layer.
+- **Sandbox pre-check picked the wrong FreeCAD install** (#58, by @s-light) —
+  `_find_freecad_cmd()` guessed from `~/bin` AppImages and `PATH`, which could
+  resolve to a completely unrelated install (a Snap package on `PATH` while the
+  live session runs from a Flatpak). That foreign binary loads its own
+  incompatible Draft/Arch/PySide stack and segfaults. The console binary is now
+  resolved from the running session's own `FreeCAD.getHomePath()` first, which
+  is guaranteed to match; the existing AppImage/`PATH` chain remains as a
+  fallback for builds that ship no `freecadcmd`.
+- **Sandbox segfaulted on any code importing Arch/BIM** (#58, by @s-light) —
+  the harness imported the real `FreeCADGui` and then patched `ActiveDocument`
+  to a no-op. But the crash happens *during* the import: the real module pulls
+  in PySide/Qt, and anything that later touches Arch dies in C++ where no
+  Python handler can catch it — there is no display and no `QApplication` event
+  loop. The harness now installs a fake `FreeCADGui` module into `sys.modules`
+  instead, so the real one is never imported. Same view-cosmetics
+  neutralisation as before (#14), without the crash. Note that the fake module
+  defines only `ActiveDocument`, `SendMsgToActiveView` and `updateGui`; the
+  no-op absorption applies *below* `Gui.ActiveDocument`, not to the module
+  itself. Any other `Gui` attribute — notably `Gui.Selection` and
+  `Gui.getDocument`, which the real module provides — now raises
+  `AttributeError` in the pre-check, so code that reads the selection fails the
+  pre-check while running fine live.
+
 ## [0.21.1-alpha] - 2026-08-05
 
 ### Fixed
