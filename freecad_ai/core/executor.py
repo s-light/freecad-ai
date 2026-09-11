@@ -287,6 +287,20 @@ try:
     # runs. The sandbox dry-runs against a copy of the saved document, so an
     # imported-and-converted mesh→solid that OCC considers invalid is present
     # on every run; without this snapshot it would fail unrelated code.
+    #
+    # Recompute once here, BEFORE snapshotting the baseline. The document was
+    # opened fresh (its on-disk cached shapes reflect whatever environment
+    # last saved it — typically the real GUI process), but the post-execution
+    # check further down forces its own doc.recompute() unconditionally. Some
+    # objects (e.g. a complex Arch::Wall whose Draft/OCC boolean fuse is
+    # sensitive to the fake-FreeCADGui/headless environment here) recompute
+    # differently under this sandbox than they did live — genuinely fine in
+    # the user's document, but landing in an Invalid state the moment this
+    # harness recomputes it. Without matching that recompute before the
+    # baseline snapshot, such an object is absent from `_baseline_bad` and
+    # every subsequent call — even a no-op read — gets its Invalid state
+    # blamed on that call's code.
+    doc.recompute()
     _baseline_bad = set()
     for _obj in doc.Objects:
         _s = _snap(_obj)
