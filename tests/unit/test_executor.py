@@ -474,6 +474,56 @@ class TestCollectObjectIssues:
         issues = executor._collect_object_issues(objects_state, set())
         assert issues == ["Object 'Pad' has null shape"]
 
+    def test_arch_container_null_shape_is_not_reported(self):
+        # PR #81: Arch/BIM containers are organizational groups that hold no
+        # geometry of their own — Shape.isNull() stays True for their whole
+        # lifetime, empty or fully populated, while State stays "Up-to-date".
+        # Flagging that failed every Arch.makeSite/makeBuilding/makeFloor call.
+        # Their TypeId (Part::FeaturePython / App::GeometryPython) is shared
+        # with countless unrelated scripted objects, so the exemption is keyed
+        # on Proxy.Type. Values below are as observed on FreeCAD 1.1.1:
+        # makeSite -> "Site", makeBuilding AND makeFloor -> "BuildingPart".
+        objects_state = [
+            {"name": "Site", "type": "Part::FeaturePython",
+             "proxy_type": "Site",
+             "null": True, "invalid": False, "invalid_state": False},
+            {"name": "BuildingPart", "type": "App::GeometryPython",
+             "proxy_type": "BuildingPart",
+             "null": True, "invalid": False, "invalid_state": False},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == [], (
+            "Arch containers (null shape, Up-to-date) must not be reported as "
+            "broken; this blocked all Arch/BIM tooling"
+        )
+
+    def test_scripted_object_without_arch_proxy_type_still_reported(self):
+        # Guards the exemption's narrowness AND the key name itself: _snap()
+        # writes "proxy_type" and this predicate reads it, with no other
+        # coupling between them. A typo on either side would silently exempt
+        # nothing (or everything) — here the same TypeId as an Arch container,
+        # carrying the empty Proxy.Type of a plain non-scripted object, must
+        # still be reported.
+        objects_state = [
+            {"name": "SomeFeature", "type": "Part::FeaturePython",
+             "proxy_type": "",
+             "null": True, "invalid": False, "invalid_state": False},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == ["Object 'SomeFeature' has null shape"]
+
+    def test_broken_arch_container_still_reported(self):
+        # Safety net, mirroring the sketch case above: the null-shape
+        # exemption must not swallow a container that genuinely failed to
+        # recompute — the separate invalid_state report still catches it.
+        objects_state = [
+            {"name": "Site", "type": "Part::FeaturePython",
+             "proxy_type": "Site",
+             "null": True, "invalid": False, "invalid_state": True},
+        ]
+        issues = executor._collect_object_issues(objects_state, set())
+        assert issues == ["Object 'Site' is in Invalid state"]
+
 
 class _FakeDoc:
     """Minimal stand-in for the App::Document slice ``_auto_save`` touches.
